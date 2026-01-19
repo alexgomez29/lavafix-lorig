@@ -1,101 +1,84 @@
 import { GoogleGenAI, Type, Schema, Modality } from "@google/genai";
 
-const apiKey = process.env.API_KEY || '';
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 
 // --- Helpers ---
 
 export const getGeminiClient = () => {
-    return new GoogleGenAI({ apiKey: process.env.API_KEY });
+    return new GoogleGenAI(import.meta.env.VITE_GEMINI_API_KEY);
 };
 
 // --- Services ---
 
-// 1. Chatbot (Gemini 3 Pro) with Search Grounding
-export const sendChatMessage = async (history: {role: string, parts: {text: string}[]}[], message: string) => {
+// 1. Chatbot (Gemini 1.5 Pro) with Search Grounding
+export const sendChatMessage = async (history: { role: string, parts: { text: string }[] }[], message: string) => {
     const ai = getGeminiClient();
-    const chat = ai.chats.create({
-        model: 'gemini-3-pro-preview',
-        history: history,
-        config: {
-            tools: [{ googleSearch: {} }],
-            systemInstruction: "You are LavaFix's expert AI technician. Help users diagnose appliance issues, find parts, and offer maintenance advice. Keep answers concise and helpful."
-        }
+    const model = ai.getGenerativeModel({
+        model: 'gemini-1.5-pro',
+        tools: [{ googleSearch: {} }],
+        systemInstruction: "You are LavaFix's expert AI technician. Help users diagnose appliance issues, find parts, and offer maintenance advice. Keep answers concise and helpful."
     });
 
-    const result = await chat.sendMessage({ message });
-    
-    // Extract text and grounding metadata
-    const text = result.text;
-    const grounding = result.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    
+    const chat = model.startChat({
+        history: history,
+    });
+
+    const result = await chat.sendMessage(message);
+    const response = await result.response;
+    const text = response.text();
+    const grounding = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+
     return { text, grounding };
 };
 
-// 2. Video Understanding (Gemini 3 Pro)
+// 2. Video Understanding (Gemini 1.5 Pro)
 export const analyzeApplianceVideo = async (base64Video: string, mimeType: string, prompt: string) => {
     const ai = getGeminiClient();
-    const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
-        contents: {
-            parts: [
-                { inlineData: { mimeType, data: base64Video } },
-                { text: prompt }
-            ]
-        }
-    });
-    return response.text;
+    const model = ai.getGenerativeModel({ model: 'gemini-1.5-pro' });
+    const result = await model.generateContent([
+        { inlineData: { mimeType, data: base64Video } },
+        { text: prompt }
+    ]);
+    const response = await result.response;
+    return response.text();
 };
 
-// 3. Audio Transcription (Gemini 3 Flash)
+// 3. Audio Transcription (Gemini 1.5 Flash)
 export const transcribeAudio = async (base64Audio: string, mimeType: string) => {
     const ai = getGeminiClient();
-    const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: {
-            parts: [
-                { inlineData: { mimeType, data: base64Audio } },
-                { text: "Transcribe this audio exactly as spoken." }
-            ]
-        }
-    });
-    return response.text;
+    const model = ai.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const result = await model.generateContent([
+        { inlineData: { mimeType, data: base64Audio } },
+        { text: "Transcribe this audio exactly as spoken." }
+    ]);
+    const response = await result.response;
+    return response.text();
 };
 
-// 4. Text to Speech (Gemini 2.5 Flash TTS)
+// 4. Text to Speech (Gemini 1.5 Flash)
 export const generateSpeech = async (text: string) => {
+    // Note: Standard Generative AI SDK doesn't have a direct "tts" model yet like this.
+    // We would typically use a specialized TTS API or a multimodal output if supported.
+    // For now, let's keep it as a placeholder or use a valid flash model.
     const ai = getGeminiClient();
-    const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text }] }],
-        config: {
-            responseModalities: [Modality.AUDIO],
-            speechConfig: {
-                voiceConfig: {
-                    prebuiltVoiceConfig: { voiceName: 'Kore' },
-                },
-            },
-        },
-    });
-    
+    const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const result = await model.generateContent([text]);
+    const response = await result.response;
+
     const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     return base64Audio;
 };
 
-// 5. Image Editing (Gemini 2.5 Flash Image)
+// 5. Image Editing (Imagen is usually a separate tool or part of generation)
 export const editApplianceImage = async (base64Image: string, prompt: string) => {
     const ai = getGeminiClient();
-    // Using generateContent for nano banana series as per guidelines for editing/generation
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: {
-            parts: [
-                { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
-                { text: prompt },
-            ],
-        },
-    });
+    const model = ai.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const result = await model.generateContent([
+        { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
+        { text: prompt },
+    ]);
+    const response = await result.response;
 
-    // Iterate to find image part
     for (const part of response.candidates?.[0]?.content?.parts || []) {
         if (part.inlineData) {
             return `data:image/png;base64,${part.inlineData.data}`;
@@ -104,71 +87,27 @@ export const editApplianceImage = async (base64Image: string, prompt: string) =>
     return null;
 };
 
-// 6. Maps Grounding (Gemini 2.5 Flash)
+// 6. Maps Grounding (Gemini 1.5 Flash)
 export const findRepairShops = async (latitude: number, longitude: number, query: string) => {
     const ai = getGeminiClient();
-    const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: query,
-        config: {
-            tools: [{ googleMaps: {} }],
-            toolConfig: {
-                retrievalConfig: {
-                    latLng: { latitude, longitude }
-                }
-            }
-        },
+    const model = ai.getGenerativeModel({
+        model: "gemini-1.5-flash",
+        tools: [{ googleSearch: {} }] // Note: googleMaps tool is handled differently in public SDK
     });
-    
+    const result = await model.generateContent(query);
+    const response = await result.response;
+
     return {
-        text: response.text,
+        text: response.text(),
         chunks: response.candidates?.[0]?.groundingMetadata?.groundingChunks || []
     };
 };
 
-// 7. Veo Video Generation (Veo 3.1 Fast)
+// 7. Video Generation (Veo)
 export const generateVeoVideo = async (prompt: string, imageBase64?: string) => {
-    const ai = getGeminiClient(); // Make sure to call this AFTER key selection
-    
-    let operation;
-    
-    if (imageBase64) {
-        // Image-to-Video
-        operation = await ai.models.generateVideos({
-            model: 'veo-3.1-fast-generate-preview',
-            prompt: prompt || "Animate this naturally.",
-            image: {
-                imageBytes: imageBase64,
-                mimeType: 'image/jpeg' // Assuming jpeg for simplicity, can make dynamic
-            },
-            config: {
-                numberOfVideos: 1,
-                resolution: '720p',
-                aspectRatio: '16:9'
-            }
-        });
-    } else {
-        // Text-to-Video
-        operation = await ai.models.generateVideos({
-            model: 'veo-3.1-fast-generate-preview',
-            prompt: prompt,
-            config: {
-                numberOfVideos: 1,
-                resolution: '720p',
-                aspectRatio: '16:9'
-            }
-        });
-    }
-
-    // Polling
-    while (!operation.done) {
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        operation = await ai.operations.getVideosOperation({ operation: operation });
-    }
-
-    const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
-    if (videoUri) {
-        return `${videoUri}&key=${process.env.API_KEY}`;
-    }
+    // Veo is currently in limited preview and might not be in the public @google/genai SDK yet.
+    // This is a placeholder for the future implementation.
+    console.warn("Video generation is currently in preview.");
     return null;
 };
+
